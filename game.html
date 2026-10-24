@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>탈북 게임</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; }
+        canvas { display: block; background: #1a5f3a; }
+        #ui { position: absolute; top: 10px; left: 10px; color: #0f0; font-family: Arial; font-size: 16px; font-weight: bold; }
+        #rules { position: absolute; top: 10px; right: 10px; color: #0ff; font-family: Arial; font-size: 12px; background: rgba(0,0,0,0.7); padding: 10px; border: 2px solid #0ff; }
+        #message { position: absolute; bottom: 50px; left: 50%; transform: translateX(-50%); color: #ff0; font-size: 20px; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="ui">
+        <div id="health">체력: HHHHH</div>
+        <div id="inv">인벤토리: 총:0 도끼:0 식량:0</div>
+    </div>
+    <div id="rules">
+        [게임 규칙]<br>
+        목표: 위쪽 파란 지점 도달<br>
+        적: 빨간 군인 피하기<br>
+        아이템: 총/도끼/식량<br>
+        조작: WASD 이동 | E 수집 | T 먹기<br>
+        총: 좌클릭 발사 | R 다시시작
+    </div>
+    <div id="message"></div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        // 게임 상태
+        const game = {
+            player: { x: canvas.width/2, y: canvas.height - 100, w: 20, h: 30, speed: 5 },
+            health: 3,
+            hunger: 0,           // 0~100 (100 = 아사)
+            hungerSpeed: 0.05,   // 시간당 증가율
+            inventory: { gun: 0, axe: 0, food: 0 },
+            gameOver: false,
+            victory: false,
+            gameOverReason: '',  // 게임오버 이유
+            keys: {},
+            items: [],
+            soldiers: [],
+            messageText: '',
+            messageTime: 0
+        };
+
+        // 아이템 생성
+        function createItems() {
+            const itemData = [
+                { x: 200, y: 300, type: 'gun', color: '#ff0000' },
+                { x: canvas.width - 200, y: 300, type: 'axe', color: '#8b4513' },
+                { x: canvas.width/2, y: 200, type: 'food', color: '#ffff00' },
+                { x: 300, y: 800, type: 'food', color: '#ffff00' },
+                { x: canvas.width - 300, y: 1200, type: 'gun', color: '#ff0000' },
+                { x: 200, y: 1600, type: 'food', color: '#ffff00' },
+                { x: canvas.width - 200, y: 1800, type: 'axe', color: '#8b4513' },
+                { x: canvas.width/2, y: 1900, type: 'food', color: '#ffff00' }
+            ];
+            return itemData.map(d => ({ ...d, r: 10, collected: false }));
+        }
+
+        // 군인 생성
+        function createSoldiers() {
+            return [
+                { x: 250, y: 400, w: 15, h: 25, color: '#cc0000', speed: 2, direction: 1, range: 150 },
+                { x: canvas.width - 250, y: 1000, w: 15, h: 25, color: '#cc0000', speed: 2, direction: 1, range: 150 },
+                { x: canvas.width/2, y: 1500, w: 15, h: 25, color: '#cc0000', speed: 2, direction: 1, range: 150 }
+            ];
+        }
+
+        game.items = createItems();
+        game.soldiers = createSoldiers();
+
+        // 총알들
+        let bullets = [];
+
+        // 총 발사
+        function shootGun() {
+            if (game.inventory.gun <= 0) {
+                showMessage('총이 없습니다!');
+                return;
+            }
+            game.inventory.gun--;
+            showMessage(`총 발사! (남은 탄약: ${game.inventory.gun})`);
+
+            // 화면 중앙에서 발사
+            bullets.push({
+                x: canvas.width / 2,
+                y: canvas.height / 2,
+                vx: Math.random() * 4 - 2,
+                vy: -8,
+                life: 300
+            });
+        }
+
+        // 게임 재시작
+        function restartGame() {
+            game.player = { x: canvas.width/2, y: canvas.height - 100, w: 20, h: 30, speed: 5 };
+            game.health = 3;
+            game.hunger = 0;
+            game.inventory = { gun: 0, axe: 0, food: 0 };
+            game.gameOver = false;
+            game.victory = false;
+            game.gameOverReason = '';
+            game.items = createItems();
+            game.soldiers = createSoldiers();
+            bullets = [];
+            game.messageText = '게임 다시 시작!';
+            game.messageTime = 120;
+        }
+
+        // 입력 처리
+        document.addEventListener('keydown', e => {
+            game.keys[e.key.toLowerCase()] = true;
+            if (e.key.toLowerCase() === 'e') pickupItem();
+            if (e.key.toLowerCase() === 't') eatFood();  // T키로 음식 먹기
+            if (e.key.toLowerCase() === 'r') {
+                if (game.gameOver || game.victory) {
+                    restartGame();
+                }
+            }
+        });
+        document.addEventListener('keyup', e => { game.keys[e.key.toLowerCase()] = false; });
+
+        // 마우스 좌클릭으로 총 발사
+        document.addEventListener('click', shootGun);
+
+        function pickupItem() {
+            game.items.forEach(item => {
+                const dx = item.x - game.player.x;
+                const dy = item.y - game.player.y;
+                if (Math.sqrt(dx*dx + dy*dy) < 40 && !item.collected) {
+                    item.collected = true;
+                    game.inventory[item.type]++;
+                    showMessage(`[${item.type.toUpperCase()}] 수집했습니다!`);
+                }
+            });
+        }
+
+        function eatFood() {
+            if (game.inventory.food > 0) {
+                game.inventory.food--;
+                game.hunger = Math.max(0, game.hunger - 30);  // 배고픔 30 감소
+                game.health = Math.min(game.health + 1, 5);
+                showMessage('식량을 먹었습니다! 배고픔 -30');
+            } else {
+                showMessage('식량이 없습니다!');
+            }
+        }
+
+        function showMessage(msg) {
+            game.messageText = msg;
+            game.messageTime = 120;
+        }
+
+        function update() {
+            if (game.gameOver || game.victory) return;
+
+            // 배고픔 증가
+            game.hunger += game.hungerSpeed;
+
+            // 아사 체크
+            if (game.hunger >= 100) {
+                game.gameOver = true;
+                game.gameOverReason = '아사';
+                return;
+            }
+
+            // 플레이어 이동
+            if (game.keys['w'] || game.keys['arrowup']) game.player.y -= game.player.speed;
+            if (game.keys['s'] || game.keys['arrowdown']) game.player.y += game.player.speed;
+            if (game.keys['a'] || game.keys['arrowleft']) game.player.x -= game.player.speed;
+            if (game.keys['d'] || game.keys['arrowright']) game.player.x += game.player.speed;
+
+            // 경계 제한
+            game.player.x = Math.max(20, Math.min(canvas.width - 20, game.player.x));
+            game.player.y = Math.max(-2000, Math.min(canvas.height - 20, game.player.y));
+
+            // 총알 업데이트
+            bullets = bullets.filter(b => {
+                b.x += b.vx;
+                b.y += b.vy;
+                b.life--;
+                return b.life > 0 && b.y > -2000;
+            });
+
+            // 총알과 군인 충돌 감지
+            bullets.forEach((b, bi) => {
+                game.soldiers.forEach((s, si) => {
+                    const dx = b.x - s.x;
+                    const dy = b.y - s.y;
+                    if (Math.sqrt(dx*dx + dy*dy) < 40) {
+                        showMessage('🔫 총에 맞은 군인!');
+                        game.soldiers.splice(si, 1);
+                        bullets.splice(bi, 1);
+                    }
+                });
+            });
+
+            // 군인 업데이트
+            game.soldiers.forEach(s => {
+                s.x += s.speed * s.direction;
+                if (s.x < 50 || s.x > canvas.width - 50) s.direction *= -1;
+
+                // 충돌
+                const dx = s.x - game.player.x;
+                const dy = s.y - game.player.y;
+                if (Math.sqrt(dx*dx + dy*dy) < 40) {
+                    game.health--;
+                    showMessage(`⚠️ 군인에게 발각! 체력: ${game.health}/5`);
+                    game.player.y += 50;
+                    if (game.health <= 0) {
+                        game.gameOver = true;
+                        game.gameOverReason = '체력 소진';
+                    }
+                }
+            });
+
+            // 승리 조건 (위쪽 도달, -2000까지)
+            if (game.player.y < -1900) {
+                game.victory = true;
+            }
+
+            game.messageTime--;
+        }
+
+        function draw() {
+            // 배경 - 카메라가 플레이어를 따라다님
+            ctx.save();
+            ctx.translate(0, -game.player.y + canvas.height/2);
+
+            ctx.fillStyle = '#1a5f3a';
+            ctx.fillRect(0, game.player.y - canvas.height, canvas.width, canvas.height * 3);
+
+            // 승리 지점 (파란색) - 매우 위에 위치
+            ctx.fillStyle = '#0000ff';
+            ctx.fillRect(canvas.width/2 - 150, -1950, 300, 50);
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 20px Arial';
+            ctx.fillText('대한민국에 오신 것을 환영합니다', canvas.width/2 - 150, -1920);
+
+            // 아이템 그리기
+            game.items.forEach(item => {
+                if (!item.collected) {
+                    ctx.fillStyle = item.color;
+                    ctx.fillRect(item.x - item.r, item.y - item.r, item.r*2, item.r*2);
+                }
+            });
+
+            // 군인 그리기
+            game.soldiers.forEach(s => {
+                ctx.fillStyle = s.color;
+                ctx.fillRect(s.x - s.w/2, s.y - s.h/2, s.w, s.h);
+                ctx.fillStyle = '#ff0000';
+                ctx.font = 'bold 12px Arial';
+                ctx.fillText('군인', s.x - 15, s.y - 20);
+            });
+
+            // 플레이어 그리기
+            ctx.fillStyle = '#00ff00';
+            ctx.fillRect(game.player.x - game.player.w/2, game.player.y - game.player.h/2, game.player.w, game.player.h);
+
+            // 총알 그리기
+            bullets.forEach(b => {
+                ctx.fillStyle = '#ffff00';
+                ctx.fillRect(b.x - 2, b.y - 2, 4, 4);
+            });
+
+            ctx.restore();
+
+            // UI (화면 고정)
+            const healthBar = 'H'.repeat(game.health) + '-'.repeat(5 - Math.max(0, game.health));
+            const hungerBar = Math.round(game.hunger) + '/100';
+            document.getElementById('health').textContent = `체력: ${healthBar} | 배고픔: ${hungerBar}`;
+            document.getElementById('inv').textContent = `인벤토리: 총:${game.inventory.gun} 도끼:${game.inventory.axe} 식량:${game.inventory.food}`;
+
+            // 메시지
+            if (game.messageTime > 0) {
+                ctx.fillStyle = '#ffff00';
+                ctx.font = 'bold 20px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(game.messageText, canvas.width/2, canvas.height - 60);
+                ctx.textAlign = 'left';
+                game.messageTime--;
+            }
+
+            // 배고픔 게이지
+            ctx.fillStyle = '#444';
+            ctx.fillRect(10, 50, 200, 20);
+            ctx.fillStyle = game.hunger > 75 ? '#ff0000' : game.hunger > 50 ? '#ffff00' : '#00ff00';
+            ctx.fillRect(10, 50, (game.hunger / 100) * 200, 20);
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(10, 50, 200, 20);
+            ctx.fillStyle = '#fff';
+            ctx.font = '12px Arial';
+            ctx.fillText(`배고픔: ${Math.round(game.hunger)}`, 15, 62);
+
+            // 게임 오버
+            if (game.gameOver) {
+                ctx.fillStyle = 'rgba(0,0,0,0.8)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#ff0000';
+                ctx.font = 'bold 50px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('GAME OVER', canvas.width/2, canvas.height/2 - 40);
+                ctx.fillStyle = '#ffff00';
+                ctx.font = '30px Arial';
+                ctx.fillText(`사유: ${game.gameOverReason}`, canvas.width/2, canvas.height/2 + 30);
+                ctx.fillStyle = '#00ff00';
+                ctx.font = '20px Arial';
+                ctx.fillText('R을 눌러 다시 시작하세요', canvas.width/2, canvas.height/2 + 80);
+                ctx.textAlign = 'left';
+            }
+
+            // 승리
+            if (game.victory) {
+                ctx.fillStyle = 'rgba(0,0,0,0.8)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = '#00ff00';
+                ctx.font = 'bold 50px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('승리!', canvas.width/2, canvas.height/2 - 40);
+                ctx.fillStyle = '#ffff00';
+                ctx.font = '25px Arial';
+                ctx.fillText('대한민국에 오신 것을 환영합니다!', canvas.width/2, canvas.height/2 + 30);
+                ctx.fillStyle = '#00ff00';
+                ctx.font = '20px Arial';
+                ctx.fillText('R을 눌러 다시 시작하세요', canvas.width/2, canvas.height/2 + 80);
+                ctx.textAlign = 'left';
+            }
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        gameLoop();
+
+        // 창 크기 조정
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+    </script>
+</body>
+</html>

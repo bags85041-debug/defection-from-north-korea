@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>[탈북] 3D 탈출 게임</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: Arial, sans-serif; background: #1a1a1a; }
+        #canvas { display: block; }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 14px;
+            font-weight: bold;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border: 2px solid #00ff00;
+            border-radius: 5px;
+        }
+        #rules {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: #00ffff;
+            font-size: 12px;
+            background: rgba(0,0,0,0.8);
+            padding: 10px;
+            border: 2px solid #00ffff;
+            border-radius: 5px;
+            max-width: 300px;
+        }
+        #message {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #ffff00;
+            font-size: 18px;
+            font-weight: bold;
+            text-align: center;
+            background: rgba(0,0,0,0.7);
+            padding: 10px 20px;
+            border-radius: 5px;
+            min-width: 300px;
+        }
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #999;
+            font-size: 12px;
+            background: rgba(0,0,0,0.7);
+            padding: 8px 15px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <div id="ui">
+        <div id="health">HEALTH: HHHHH</div>
+        <div id="inventory">GUN:0 AXE:0 FOOD:0</div>
+    </div>
+    <div id="rules">
+        <div style="color: #ffff00; font-weight: bold;">[GAME RULES]</div>
+        <div>Goal: Reach BLUE zone</div>
+        <div>Avoid: RED soldiers</div>
+        <div>Items: Gun/Axe/Food</div>
+        <div>Recovery: Press R to eat</div>
+        <div>Controls: WASD/Mouse</div>
+    </div>
+    <div id="message"></div>
+    <div id="controls">[CONTROLS] WASD: Move | Mouse: Look | E: Pickup | R: Eat | ESC: Exit</div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Three.js 3D 게임
+        const canvas = document.getElementById('canvas');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x4db8ff);
+        scene.fog = new THREE.Fog(0x4db8ff, 200, 500);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 2, 0);
+
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+
+        // 조명
+        const light = new THREE.DirectionalLight(0xffffff, 1);
+        light.position.set(50, 50, 50);
+        light.castShadow = true;
+        light.shadow.mapSize.width = 2048;
+        light.shadow.mapSize.height = 2048;
+        light.shadow.camera.left = -100;
+        light.shadow.camera.right = 100;
+        light.shadow.camera.top = 100;
+        light.shadow.camera.bottom = -100;
+        scene.add(light);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+
+        // 바닥
+        const groundGeometry = new THREE.BoxGeometry(100, 1, 100);
+        const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x666666 });
+        const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+        ground.position.y = -0.5;
+        ground.receiveShadow = true;
+        scene.add(ground);
+
+        // 승리 지점 (파란색)
+        const victoryGeometry = new THREE.BoxGeometry(80, 3, 5);
+        const victoryMaterial = new THREE.MeshLambertMaterial({ color: 0x0000ff, transparent: true, opacity: 0.6 });
+        const victoryZone = new THREE.Mesh(victoryGeometry, victoryMaterial);
+        victoryZone.position.set(0, 1.5, 50);
+        victoryZone.receiveShadow = true;
+        victoryZone.castShadow = true;
+        scene.add(victoryZone);
+
+        // 플레이어
+        const playerGeometry = new THREE.CapsuleGeometry(0.4, 1.8, 4, 8);
+        const playerMaterial = new THREE.MeshLambertMaterial({ color: 0x00ff00 });
+        const player = new THREE.Mesh(playerGeometry, playerMaterial);
+        player.position.set(0, 1, 0);
+        player.castShadow = true;
+        player.receiveShadow = true;
+        scene.add(player);
+
+        // 게임 상태
+        let gameState = {
+            position: { x: 0, y: 1, z: 0 },
+            health: 3,
+            inventory: { gun: 0, axe: 0, food: 0 },
+            gameOver: false,
+            victory: false,
+            keys: {},
+            yaw: 0,
+            pitch: 0
+        };
+
+        // 인간 형태의 객체 생성
+        function createHuman(x, y, z, color) {
+            const group = new THREE.Group();
+            group.position.set(x, y, z);
+
+            // 머리
+            const headGeometry = new THREE.SphereGeometry(0.4, 8, 8);
+            const headMaterial = new THREE.MeshLambertMaterial({ color: 0xffaa66 });
+            const head = new THREE.Mesh(headGeometry, headMaterial);
+            head.position.y = 1.6;
+            head.castShadow = true;
+            group.add(head);
+
+            // 몸통
+            const bodyGeometry = new THREE.BoxGeometry(0.35, 0.8, 0.25);
+            const bodyMaterial = new THREE.MeshLambertMaterial({ color });
+            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+            body.position.y = 0.9;
+            body.castShadow = true;
+            group.add(body);
+
+            // 팔
+            const armGeometry = new THREE.BoxGeometry(0.15, 0.7, 0.15);
+            const armMaterial = new THREE.MeshLambertMaterial({ color: 0xffaa66 });
+            const leftArm = new THREE.Mesh(armGeometry, armMaterial);
+            leftArm.position.set(-0.35, 0.8, 0);
+            leftArm.castShadow = true;
+            group.add(leftArm);
+
+            const rightArm = new THREE.Mesh(armGeometry, armMaterial);
+            rightArm.position.set(0.35, 0.8, 0);
+            rightArm.castShadow = true;
+            group.add(rightArm);
+
+            // 다리
+            const legGeometry = new THREE.BoxGeometry(0.15, 0.8, 0.15);
+            const legMaterial = new THREE.MeshLambertMaterial({ color: 0x333333 });
+            const leftLeg = new THREE.Mesh(legGeometry, legMaterial);
+            leftLeg.position.set(-0.15, 0.2, 0);
+            leftLeg.castShadow = true;
+            group.add(leftLeg);
+
+            const rightLeg = new THREE.Mesh(legGeometry, legMaterial);
+            rightLeg.position.set(0.15, 0.2, 0);
+            rightLeg.castShadow = true;
+            group.add(rightLeg);
+
+            group.castShadow = true;
+            group.receiveShadow = true;
+            return group;
+        }
+
+        // 아이템들
+        const items = [];
+        const itemData = [
+            { pos: [20, 1, 20], type: 'gun', color: 0xff0000 },
+            { pos: [-20, 1, 20], type: 'axe', color: 0x996633 },
+            { pos: [0, 1, 30], type: 'food', color: 0xffff00 },
+            { pos: [30, 1, 50], type: 'food', color: 0xffff00 },
+            { pos: [-30, 1, 50], type: 'gun', color: 0xff0000 },
+            { pos: [15, 1, 70], type: 'food', color: 0xffff00 },
+            { pos: [-15, 1, 70], type: 'axe', color: 0x996633 },
+            { pos: [0, 1, 85], type: 'food', color: 0xffff00 }
+        ];
+
+        itemData.forEach(data => {
+            const geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+            const material = new THREE.MeshLambertMaterial({ color: data.color });
+            const item = new THREE.Mesh(geometry, material);
+            item.position.set(...data.pos);
+            item.castShadow = true;
+            item.receiveShadow = true;
+            item.userData = { type: data.type, collected: false };
+            scene.add(item);
+            items.push(item);
+        });
+
+        // 군인들
+        const soldiers = [];
+        const soldierPositions = [[25, 1, 30], [-25, 1, 50], [0, 1, 70]];
+
+        soldierPositions.forEach(pos => {
+            const soldier = createHuman(pos[0], pos[1], pos[2], 0xff0000);
+            soldier.userData = {
+                x: pos[0],
+                y: pos[1],
+                z: pos[2],
+                startX: pos[0],
+                direction: Math.random() > 0.5 ? 1 : -1,
+                speed: 5,
+                patrolDistance: 30
+            };
+            scene.add(soldier);
+            soldiers.push(soldier);
+        });
+
+        // 입력 처리
+        document.addEventListener('keydown', (e) => { gameState.keys[e.key.toLowerCase()] = true; });
+        document.addEventListener('keyup', (e) => { gameState.keys[e.key.toLowerCase()] = false; });
+
+        document.addEventListener('mousemove', (e) => {
+            gameState.yaw -= e.movementX * 0.005;
+            gameState.pitch -= e.movementY * 0.005;
+            gameState.pitch = Math.max(-Math.PI/2, Math.min(Math.PI/2, gameState.pitch));
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'e') pickupItem();
+            if (e.key === 'r') eatFood();
+        });
+
+        document.addEventListener('click', () => { canvas.requestPointerLock = canvas.requestPointerLock || canvas.mozRequestPointerLock; canvas.requestPointerLock(); });
+
+        // 메시지 표시
+        let messageTimeout;
+        function showMessage(msg) {
+            document.getElementById('message').textContent = msg;
+            clearTimeout(messageTimeout);
+            messageTimeout = setTimeout(() => { document.getElementById('message').textContent = ''; }, 3000);
+        }
+
+        // 아이템 수집
+        function pickupItem() {
+            items.forEach(item => {
+                const dist = Math.sqrt(
+                    Math.pow(item.position.x - gameState.position.x, 2) +
+                    Math.pow(item.position.y - gameState.position.y, 2) +
+                    Math.pow(item.position.z - gameState.position.z, 2)
+                );
+                if (dist < 3 && !item.userData.collected) {
+                    item.userData.collected = true;
+                    gameState.inventory[item.userData.type]++;
+                    scene.remove(item);
+                    showMessage(`[GET] ${item.userData.type.toUpperCase()}!`);
+                }
+            });
+        }
+
+        // 식량 섭취
+        function eatFood() {
+            if (gameState.inventory.food > 0) {
+                gameState.inventory.food--;
+                gameState.health = Math.min(gameState.health + 1, 5);
+                showMessage('[FOOD] Eaten! +1 Health');
+            } else {
+                showMessage('[ERROR] No food!');
+            }
+        }
+
+        // 게임 루프
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // 플레이어 이동
+            const moveSpeed = 0.1;
+            if (gameState.keys['w']) gameState.position.z -= moveSpeed * Math.cos(gameState.yaw);
+            if (gameState.keys['s']) gameState.position.z += moveSpeed * Math.cos(gameState.yaw);
+            if (gameState.keys['a']) gameState.position.x -= moveSpeed * Math.sin(gameState.yaw + Math.PI/2);
+            if (gameState.keys['d']) gameState.position.x += moveSpeed * Math.sin(gameState.yaw + Math.PI/2);
+
+            gameState.position.z = Math.max(-50, Math.min(gameState.position.z, 100));
+            gameState.position.x = Math.max(-50, Math.min(gameState.position.x, 50));
+            gameState.position.y = 1;
+
+            player.position.copy(gameState.position);
+
+            camera.position.copy(gameState.position);
+            camera.position.y += 1.6;
+            const lookAt = new THREE.Vector3();
+            lookAt.x = camera.position.x + Math.sin(gameState.yaw) * Math.cos(gameState.pitch);
+            lookAt.y = camera.position.y + Math.sin(gameState.pitch);
+            lookAt.z = camera.position.z + Math.cos(gameState.yaw) * Math.cos(gameState.pitch);
+            camera.lookAt(lookAt);
+
+            // 군인 업데이트
+            soldiers.forEach(soldier => {
+                const data = soldier.userData;
+                data.x += (data.speed * data.direction) * 0.016;
+                if (Math.abs(data.x - data.startX) > data.patrolDistance) {
+                    data.direction *= -1;
+                }
+                soldier.position.x = data.x;
+
+                // 충돌 감지
+                const dist = Math.sqrt(
+                    Math.pow(soldier.position.x - gameState.position.x, 2) +
+                    Math.pow(soldier.position.z - gameState.position.z, 2)
+                );
+                if (dist < 2 && !gameState.gameOver && !gameState.victory) {
+                    gameState.health--;
+                    showMessage(`[ALERT] Caught! Health: ${gameState.health}/5`);
+                    if (gameState.health <= 0) {
+                        gameState.gameOver = true;
+                        document.getElementById('message').textContent = '[GAME OVER] Escape Failed...';
+                        document.getElementById('message').style.color = '#ff0000';
+                    }
+                }
+            });
+
+            // 승리 조건
+            const victoryDist = Math.sqrt(
+                Math.pow(gameState.position.x - victoryZone.position.x, 2) +
+                Math.pow(gameState.position.z - victoryZone.position.z, 2)
+            );
+            if (victoryDist < 15 && !gameState.gameOver && !gameState.victory) {
+                gameState.victory = true;
+                document.getElementById('message').textContent = '[VICTORY] Welcome to South Korea!';
+                document.getElementById('message').style.color = '#ffff00';
+            }
+
+            // UI 업데이트
+            const healthBar = 'H'.repeat(gameState.health) + '-'.repeat(5 - gameState.health);
+            document.getElementById('health').textContent = `HEALTH: ${healthBar}`;
+            document.getElementById('inventory').textContent = `GUN:${gameState.inventory.gun} AXE:${gameState.inventory.axe} FOOD:${gameState.inventory.food}`;
+
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>
